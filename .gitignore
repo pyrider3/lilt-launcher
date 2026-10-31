@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+*.pkg.tar.*
+*.AppImage
+*.before-*
+.cache/
+state/
+runtime/
+icons.json

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Standalone host launcher. Based on iNiR by snowarch; see NOTICE."""
+import argparse
+import fcntl
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+
+def paths():
+    root = Path(__file__).resolve().parent.parent
+    package = root if (root / "payload/shell.qml").is_file() else root / "share/lilt-launcher"
+    return package, package / "payload"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Lilt Launcher — modified standalone derivative of iNiR")
+    parser.add_argument("command", nargs="?", default="toggle", choices=["toggle", "open", "close", "stop", "status", "search", "check"])
+    parser.add_argument("query", nargs="?", default="")
+    args = parser.parse_args()
+    package, source = paths()
+    qs = shutil.which("qs") or shutil.which("quickshell")
+    missing = [p for p in ("bwrap", "systemd-run", "gtk-launch") if not shutil.which(p)]
+    if not qs:
+        missing.append("quickshell")
+    if not (source / "shell.qml").is_file():
+        missing.append("source payload")
+    if args.command == "check":
+        print(json.dumps({"payload": str(source), "missing": missing}, indent=2))
+        return bool(missing)
+    if missing:
+        parser.error("missing dependencies: " + ", ".join(missing))
+    home = Path.home()
+    state = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state")) / "lilt-launcher"
+    normal_data_home = Path(os.environ.get("XDG_DATA_HOME", home / ".local/share"))
+    normal_data_dirs = [Path(p) for p in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if p]
+    for directory in ("config/illogical-impulse", "state", "cache", "data", "logs"):
+        (state / directory).mkdir(parents=True, exist_ok=True)
+    config = state / "config/illogical-impulse/config.json"
+    if not config.exists():
+        shutil.copy2(package / "config.json", config)
+    fonts = state / "fonts.conf"
+    from xml.sax.saxutils import escape
+    fonts.write_text('<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig>'
+        '<include ignore_missing="yes">/etc/fonts/fonts.conf</include>'
+        f'<dir>{escape(str(source / "assets/fonts"))}</dir><cachedir>{escape(str(state / "cache/fonts"))}</cachedir></fontconfig>')
+    env = os.environ.copy()
+    env.update({"XDG_CONFIG_HOME": str(state / "config"), "XDG_STATE_HOME": str(state / "state"),
+        "XDG_CACHE_HOME": str(state / "cache"), "XDG_DATA_HOME": str(state / "data"),
+        "XDG_DATA_DIRS": ":".join(str(p) for p in [normal_data_home, *normal_data_dirs]),
+        "GOCACHE": str(state / "cache/go-build"), "GOPATH": str(state / "data/go"),
+        "FONTCONFIG_FILE": str(fonts), "GSETTINGS_BACKEND": "memory", "QT_SCALE_FACTOR": "1",
+        "QT_QPA_PLATFORMTHEME": "", "QT_QUICK_CONTROLS_STYLE": "Basic", "LILT_ICON_CACHE": str(state / "icons.json")})
+
+    def ipc(command, *arguments):
+        return subprocess.run([qs, "-p", str(source), "ipc", "call", "launcher", command, *arguments], env=env, capture_output=True, text=True)
+
+    mode = "quit" if args.command == "stop" else args.command
+    arguments = [args.query] if mode == "search" else []
+    result = ipc(mode, *arguments)
+    if args.command in ("stop", "close", "status") or result.returncode == 0:
+        print(result.stdout, end="")
+        if result.returncode:
+            print(result.stderr, end="", file=sys.stderr)
+        return result.returncode
+    # Serialize cold starts; do not create competing hosts on repeated shortcuts.
+    with (state / "start.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        result = ipc(mode, *arguments)
+        if result.returncode == 0:
+            return 0
+        spec = importlib.util.spec_from_file_location("lilt_icons", package / "tools/build_icon_cache.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.build(state / "icons.json", normal_data_home, normal_data_dirs)
+        runtime = env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        with (state / "logs/session.log").open("a") as log:
+            process = subprocess.Popen(["bwrap", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev",
+                "--proc", "/proc", "--bind", str(state), str(state), "--bind", runtime, runtime,
+                "--tmpfs", "/tmp", "--", qs, "-n", "-p", str(source)], env=env,
+                stdout=log, stderr=log, start_new_session=True)
+        for _ in range(150):
+            if process.poll() is not None:
+                raise SystemExit(f"Launcher exited; see {state / 'logs/session.log'}")
+            result = ipc("search", args.query) if mode == "search" else ipc("open")
+            if result.returncode == 0:
+                return 0
+            time.sleep(0.1)
+        raise SystemExit(f"Startup timed out; see {state / 'logs/session.log'}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

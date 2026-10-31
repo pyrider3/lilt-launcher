@@ -1,0 +1,30 @@
+{
+  "panelFamily": "iris",
+  "enabledPanels": [],
+  "appearance": {
+    "iconTheme": "breeze",
+    "typography": {
+      "syncWithSystem": false
+    },
+    "wallpaperTheming": {
+      "enableAppsAndShell": false,
+      "enableTerminal": false,
+      "enableVesktop": false
+    }
+  },
+  "iris": {
+    "palette": {
+      "opens": "floating",
+      "showHints": false
+    },
+    "dock": {
+      "enable": false
+    },
+    "surround": {
+      "enable": false
+    }
+  },
+  "search": {
+    "engineBaseUrl": "https://www.google.com/search?q="
+  }
+}
