@@ -667,6 +667,9 @@ Singleton {
         const found = launcherIcons[key] ?? launcherIcons[key.startsWith("file://") ? key.slice(7) : key]
         if (found) return "file://" + found
         if (key.startsWith("chrome-")) return "file://" + launcherIcons["google-chrome"]
+        // Not in the bundled map: try the system icon theme so newly installed apps get their icon
+        const themed = key.length > 0 ? Quickshell.iconPath(key, true) : ""
+        if (themed.length > 0) return themed
         const backup = launcherIcons[fallback] ?? launcherIcons["application-x-executable"]
         return backup ? "file://" + backup : Quickshell.shellPath("assets/launcher-fallback.svg")
     }
